@@ -88,15 +88,34 @@ docker compose exec -T postgres psql -U temonx -d temonx -f /tmp/auth_schema.sql
 docker compose exec -T postgres psql -U temonx -d temonx -f /tmp/auth_schema_v2.sql 2>/dev/null || true
 log "Database initialized"
 
+# Ask for organization details
+echo ""
+read -rp "$(echo -e ${BLUE}Organization name [My Company]: ${NC})" ORG_NAME
+ORG_NAME="${ORG_NAME:-My Company}"
+
+read -rp "$(echo -e ${BLUE}Organization ID/slug [mycompany]: ${NC})" ORG_SLUG
+ORG_SLUG="${ORG_SLUG:-mycompany}"
+ORG_SLUG=$(echo "$ORG_SLUG" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//;s/-$//')
+
+read -rp "$(echo -e ${BLUE}Admin email [admin@company.com]: ${NC})" ADMIN_EMAIL
+ADMIN_EMAIL="${ADMIN_EMAIL:-admin@company.com}"
+
+# Generate random password
+ADMIN_PASSWORD=$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 14)
+
 # Create admin account
 info "Creating admin account..."
 docker compose exec -T backend python3 -c "
 import sys; sys.path.insert(0, '/app')
 try:
     from backend.auth_db import create_tenant, create_user, get_tenant_by_slug
-    if not get_tenant_by_slug('admin'):
-        t = create_tenant('Admin', 'admin', 'enterprise')
-        create_user(str(t['id']), 'admin@temonx.io', 'admin', 'TemonX-Admin-2026!', 'admin', 'Admin User')
+    org_name  = '${ORG_NAME}'
+    org_slug  = '${ORG_SLUG}'
+    email     = '${ADMIN_EMAIL}'
+    password  = '${ADMIN_PASSWORD}'
+    if not get_tenant_by_slug(org_slug):
+        t = create_tenant(org_name, org_slug, 'trial')
+        create_user(str(t['id']), email, 'admin', password, 'admin', 'Admin User')
         print('Admin created')
     else:
         print('Already exists')
@@ -107,15 +126,27 @@ log "Admin account ready"
 
 SERVER_IP=$(grep SERVER_HOST .env | cut -d= -f2)
 echo ""
-echo -e "${GREEN}╔══════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║     TemonX IRP Installation Complete!    ║${NC}"
-echo -e "${GREEN}╚══════════════════════════════════════════╝${NC}"
+echo -e "${GREEN}╔══════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║        TemonX IRP Installation Complete! 🚀      ║${NC}"
+echo -e "${GREEN}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  ${BLUE}URL:${NC}       http://${SERVER_IP}"
-echo -e "  ${BLUE}Org ID:${NC}    admin"
+echo -e "  ${BLUE}Org ID:${NC}    ${ORG_SLUG}"
 echo -e "  ${BLUE}Username:${NC}  admin"
-echo -e "  ${BLUE}Password:${NC}  TemonX-Admin-2026!"
+echo -e "  ${BLUE}Password:${NC}  ${ADMIN_PASSWORD}"
 echo ""
-echo -e "  ${YELLOW}⚠ Change default password immediately!${NC}"
+echo -e "  ${YELLOW}⚠ Save your password — it will not be shown again!${NC}"
+echo -e "  ${BLUE}License:${NC}   Add LICENSE_KEY to ${TEMONX_DIR}/.env"
 echo -e "  ${BLUE}Docs:${NC}      https://docs.temonx.io"
 echo ""
+# Save credentials to file
+cat > "${TEMONX_DIR}/credentials.txt" << CREDS
+TemonX IRP Credentials — $(date)
+URL:      http://${SERVER_IP}
+Org ID:   ${ORG_SLUG}
+Username: admin
+Password: ${ADMIN_PASSWORD}
+Email:    ${ADMIN_EMAIL}
+CREDS
+chmod 600 "${TEMONX_DIR}/credentials.txt"
+log "Credentials saved to ${TEMONX_DIR}/credentials.txt"
