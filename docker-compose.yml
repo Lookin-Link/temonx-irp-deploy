@@ -1,0 +1,101 @@
+version: "3.8"
+
+services:
+  frontend:
+    image: ghcr.io/lookin-link/temonx-irp-frontend:latest
+    container_name: temonx-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  backend:
+    image: ghcr.io/lookin-link/temonx-irp-backend:latest
+    container_name: temonx-backend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - AUTH_DATABASE_URL=postgresql://temonx:${POSTGRES_PASSWORD}@postgres:5432/temonx
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-temonx}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-te_metrics}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - AI_PROVIDER=${AI_PROVIDER:-anthropic}
+      - CLICKHOUSE_URL=${CLICKHOUSE_URL:-}
+      - LICENSE_KEY=${LICENSE_KEY:-}
+      - SECRET_KEY=${SECRET_KEY}
+      - CORS_ORIGINS=http://${SERVER_HOST:-localhost}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  collector:
+    image: ghcr.io/lookin-link/temonx-irp-backend:latest
+    container_name: temonx-collector
+    restart: unless-stopped
+    command: ["python", "-m", "backend.collector_snmp"]
+    volumes:
+      - ./data:/app/data
+    environment:
+      - AUTH_DATABASE_URL=postgresql://temonx:${POSTGRES_PASSWORD}@postgres:5432/temonx
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-temonx}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-te_metrics}
+      - LICENSE_KEY=${LICENSE_KEY:-}
+    depends_on:
+      - backend
+      - influxdb
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: temonx-postgres
+    restart: unless-stopped
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=temonx
+      - POSTGRES_USER=temonx
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temonx"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: temonx-influxdb
+    restart: unless-stopped
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=temonx
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_PASSWORD}
+      - DOCKER_INFLUXDB_INIT_ORG=${INFLUXDB_ORG:-temonx}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET:-te_metrics}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN}
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  influxdb-data:
