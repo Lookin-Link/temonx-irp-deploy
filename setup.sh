@@ -59,12 +59,36 @@ docker compose pull
 info "Starting TemonX IRP..."
 docker compose up -d
 
-info "Waiting for backend..."
+info "Waiting for services..."
 for i in {1..30}; do
-  curl -sf http://localhost:8000/health &>/dev/null && log "Backend ready" && break
+  curl -sf http://localhost:8000/health &>/dev/null && break
   sleep 3
 done
+log "Backend ready"
 
+# Fix InfluxDB token (get actual token from running container)
+info "Syncing InfluxDB token..."
+sleep 5
+ACTUAL_TOKEN=$(docker compose exec -T influxdb influx auth list --json 2>/dev/null | \
+  python3 -c "import sys,json; auths=json.load(sys.stdin); print(auths[0]['token'])" 2>/dev/null || echo "")
+if [ -n "$ACTUAL_TOKEN" ]; then
+  sed -i "s/INFLUXDB_TOKEN=.*/INFLUXDB_TOKEN=${ACTUAL_TOKEN}/" .env
+  docker compose up -d backend collector
+  sleep 5
+  log "InfluxDB token synced"
+fi
+
+# Initialize database schema
+info "Initializing database..."
+docker compose cp backend:/app/backend/auth_schema.sql /tmp/auth_schema.sql 2>/dev/null || true
+docker compose cp backend:/app/backend/auth_schema_v2.sql /tmp/auth_schema_v2.sql 2>/dev/null || true
+docker cp /tmp/auth_schema.sql temonx-postgres:/tmp/ 2>/dev/null || true
+docker cp /tmp/auth_schema_v2.sql temonx-postgres:/tmp/ 2>/dev/null || true
+docker compose exec -T postgres psql -U temonx -d temonx -f /tmp/auth_schema.sql 2>/dev/null || true
+docker compose exec -T postgres psql -U temonx -d temonx -f /tmp/auth_schema_v2.sql 2>/dev/null || true
+log "Database initialized"
+
+# Create admin account
 info "Creating admin account..."
 docker compose exec -T backend python3 -c "
 import sys; sys.path.insert(0, '/app')
@@ -79,6 +103,7 @@ try:
 except Exception as e:
     print(f'Note: {e}')
 " 2>/dev/null || true
+log "Admin account ready"
 
 SERVER_IP=$(grep SERVER_HOST .env | cut -d= -f2)
 echo ""
@@ -87,6 +112,7 @@ echo -e "${GREEN}║     TemonX IRP Installation Complete!    ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  ${BLUE}URL:${NC}       http://${SERVER_IP}"
+echo -e "  ${BLUE}Org ID:${NC}    admin"
 echo -e "  ${BLUE}Username:${NC}  admin"
 echo -e "  ${BLUE}Password:${NC}  TemonX-Admin-2026!"
 echo ""
